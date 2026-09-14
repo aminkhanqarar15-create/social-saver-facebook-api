@@ -1,7 +1,14 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 import yt_dlp
+import os
+import uuid
 
 app = Flask(__name__)
+
+DOWNLOAD_FOLDER = "downloads"
+
+if not os.path.exists(DOWNLOAD_FOLDER):
+    os.makedirs(DOWNLOAD_FOLDER)
 
 
 @app.route("/")
@@ -43,11 +50,31 @@ def download():
             "message": "Invalid Facebook URL"
         }), 400
 
+    filename = str(uuid.uuid4()) + ".mp4"
+
+    output_path = os.path.join(
+        DOWNLOAD_FOLDER,
+        filename
+    )
+
     options = {
         "quiet": True,
         "no_warnings": True,
-        "skip_download": True,
-        "format": "best[ext=mp4]/best"
+
+        "format":
+            "best[ext=mp4][acodec!=none][vcodec!=none]"
+            "/best[ext=mp4]"
+            "/best",
+
+        "outtmpl": output_path,
+
+        "merge_output_format": "mp4",
+
+        "noplaylist": True,
+
+        "retries": 3,
+
+        "socket_timeout": 60
     }
 
     try:
@@ -56,46 +83,92 @@ def download():
 
             info = ydl.extract_info(
                 url,
-                download=False
+                download=True
             )
 
-            video_url = info.get("url")
+        if not os.path.exists(output_path):
 
-            if not video_url:
+            files = os.listdir(
+                DOWNLOAD_FOLDER
+            )
 
-                formats = info.get("formats", [])
+            mp4_files = [
+                f for f in files
+                if f.endswith(".mp4")
+            ]
 
-                for fmt in reversed(formats):
+            if mp4_files:
 
-                    if fmt.get("url"):
-                        video_url = fmt["url"]
-                        break
+                latest = max(
+                    mp4_files,
+                    key=lambda f:
+                    os.path.getmtime(
+                        os.path.join(
+                            DOWNLOAD_FOLDER,
+                            f
+                        )
+                    )
+                )
 
-            if not video_url:
-                return jsonify({
-                    "success": False,
-                    "message": "Video URL not found"
-                }), 404
+                filename = latest
+
+        if not os.path.exists(
+            os.path.join(
+                DOWNLOAD_FOLDER,
+                filename
+            )
+        ):
 
             return jsonify({
-                "success": True,
-                "title": info.get(
-                    "title",
-                    "Facebook Video"
-                ),
-                "download_url": video_url
-            })
+                "success": False,
+                "message": "Video file was not created"
+            }), 500
+
+        return jsonify({
+
+            "success": True,
+
+            "title": info.get(
+                "title",
+                "Facebook Video"
+            ),
+
+            "download_url":
+                "/files/" + filename
+
+        })
 
     except Exception as e:
 
         return jsonify({
+
             "success": False,
+
             "message": str(e)
+
         }), 500
 
 
+@app.route("/files/<filename>")
+def files(filename):
+
+    return send_from_directory(
+        DOWNLOAD_FOLDER,
+        filename,
+        as_attachment=True
+    )
+
+
 if __name__ == "__main__":
+
+    port = int(
+        os.environ.get(
+            "PORT",
+            5000
+        )
+    )
+
     app.run(
         host="0.0.0.0",
-        port=5000
+        port=port
     )
